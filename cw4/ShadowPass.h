@@ -31,7 +31,7 @@ namespace Shadow {
         ShadowPass(lut::VulkanContext &aContext, lut::Allocator const& aAllocator, int size, int width, int height);
 
         // which light, for point light only
-        void triggerPass(int index, glm::vec3 lightPos, float max_dpeth, VkCommandBuffer const&cBuffer, const std::function<void(VkCommandBuffer const&)> &onDraw);
+        void triggerPass(int index, glm::mat4 const& transform, VkCommandBuffer const&cBuffer, const std::function<void(VkCommandBuffer const&)> &onDraw);
         
         // create desc set
         void createShadowSet(lut::VulkanContext const& aContext,
@@ -54,21 +54,18 @@ namespace Shadow {
     private:
         struct UShadowTransform {
             glm::mat4 mat;
-            glm::vec3 light_pos;
-            float max_depth;
         };
         std::unique_ptr<VkUBO<UShadowTransform>> shadow_transform_ubo = nullptr;
 
         RenderPipeLine m_shadow_pipe = {};
 
         void createRenderPass(lut::VulkanContext &aContext);
-        void createCubeArray(lut::VulkanContext &aContext, lut::Allocator const& aAllocator);
+        void createShadowArray(lut::VulkanContext &aContext, lut::Allocator const& aAllocator);
         void createFrameBuffers(lut::VulkanContext &aContext);
 
         lut::RenderPass m_pass;
         std::vector<lut::Framebuffer> m_fbs;
-        std::tuple<lut::ImageView, lut::Image> m_shadow_cube_array;
-        std::vector<lut::ImageView> attachemt_views;
+        std::vector<std::tuple<lut::ImageView, lut::Image>> shadow_imgs;
         int m_size = 1;
         int m_width = 256;
         int m_height = 256;

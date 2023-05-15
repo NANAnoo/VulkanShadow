@@ -27,13 +27,6 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-#if !defined(GLM_FORCE_RADIANS)
-#	define GLM_FORCE_RADIANS
-#endif
-#include <glm/glm.hpp>
-#include <glm/gtx/transform.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-
 #include "../labutils/to_string.hpp"
 #include "../labutils/vulkan_window.hpp"
 
@@ -53,6 +46,7 @@ using namespace labutils::literals;
 #include "VkConstant.hpp"
 #include "FpsController.hpp"
 #include "ShadowPass.h"
+#include "structs.h"
 
 namespace lut = labutils;
 
@@ -76,7 +70,7 @@ namespace
 		// minimal depth fighting. Larger ratios will introduce more depth
 		// fighting problems; smaller ratios will increase the depth buffer's
 		// resolution but will also limit the view distance.
-		constexpr float kCameraNear  = 0.1f;
+		constexpr float kCameraNear  = 1.f;
 		constexpr float kCameraFar   = 100.f;
 
 		constexpr auto kCameraFov    = 60.0_degf;
@@ -90,44 +84,34 @@ namespace
 		};
 	}
 
-	// Local types/structures:
-	// Uniform data
-	namespace glsl
-	{
-		struct SceneUniform {
-			glm::mat4 M;
-			glm::mat4 V;
-			glm::mat4 P;
-			glm::vec3 camPos;
-			int light_count = cfg::kLightNum;
-		};
+	using LightArrayUBO = VkUBO<glsl::TArray<glsl::SpotLight, cfg::kLightNum>>;
+	using LightTransUBO = VkUBO<glsl::TArray<glm::mat4, cfg::kLightNum>>;
 
-		struct LightInfo {
-			glm::vec4 color;
-			glm::vec3 position;
-			float max_depth = 100;
-		};
-		
-		template <int count>
-		struct LightArray {
-			LightInfo array[count];
-		};
-
-		using LightArrayUBO = VkUBO<glsl::LightArray<cfg::kLightNum>>;
-
-		static bool lightChanged[cfg::kLightNum] = {true};
-		inline void updateLight(const LightArrayUBO& ubo, int which, glm::vec3 pos, glm::vec4 color = glm::vec4(1)) {
-			lightChanged[which] = true;
-			ubo.data->array[which].position = pos;
-			ubo.data->array[which].color = color;
-			ubo.data->array[which].max_depth = 100.0;
-		}
-		inline void resetLights() {
-			for (int i = 0; i < cfg::kLightNum; i ++) {
-				lightChanged[i] = false;
-			}
-		}
-	}
+    static bool lightChanged[cfg::kLightNum] = {true};
+	static inline glm::mat4 getLightTransform(glsl::SpotLight const&light) {
+		glm::mat4 P = glm::perspectiveRH_ZO(
+			lut::Radians(cfg::kCameraFov).value(),
+			1.0f,
+			0.1f,
+			50.f
+		);
+		P[1][1] *= -1.f;
+        glm::mat4 view = glm::lookAt(glm::vec3(light.position), glm::vec3(light.position) + light.direction, glm::vec3(0, 1, 0));
+        return  P * view;
+    }
+    inline void updateLight(const LightArrayUBO& ubo, const LightTransUBO& trans_ubo, int which, glm::vec3 pos, glm::vec3 dir, glm::vec4 color = glm::vec4(1)) {
+        lightChanged[which] = true;
+        ubo.data->array[which].position = {pos, 1};
+        ubo.data->array[which].color = color;
+        ubo.data->array[which].direction = glm::normalize(dir);
+		ubo.data->array[which].fov = 30;
+		trans_ubo.data->array[which] = getLightTransform(ubo.data->array[which]);
+    }
+    inline void resetLights() {
+        for (int i = 0; i < cfg::kLightNum; i ++) {
+            lightChanged[i] = false;
+        }
+    }
 
 	// Local functions:
 	lut::RenderPass create_render_pass( lut::VulkanWindow const& );
@@ -191,12 +175,12 @@ int main(int argc, char **argv) try
 	}
 	// Create Vulkan Window
 	auto window = lut::make_vulkan_window(level);
+	glfwSetWindowSize(window.window, 800, 800);
 
 	// Configure the GLFW window
 	static bool enableMouseNavigation = false;
-	static FpsController sController({0, 3, 0}, {0, 180, 0}, 5, 4);
+	static FpsController sController({0, 0, -25}, {0, 0, 0}, 5, 4);
 	static float cursor_x = 0, cursor_y = 0, offset_x = 0, offset_y = 0;
-	static glm::vec3 sLightPosition = glm::vec3(0, 8, -1);
 	static cfg::ShadingMode sCurrentMode = cfg::Basic;
 	static bool shouldGeneratePipeLine = true;
 	static bool modeChanged = true;
@@ -216,13 +200,6 @@ int main(int argc, char **argv) try
 		} else if (aAction == GLFW_PRESS) {
 			sController.onKeyPress(aKey);
 		} 
-		if (aAction == GLFW_REPEAT || aAction == GLFW_PRESS) {
-			if (aKey == GLFW_KEY_UP) {
-				sLightPosition += glm::vec3(0, 0.1, 0);
-			} else if (aKey == GLFW_KEY_DOWN) {
-				sLightPosition -= glm::vec3(0, 0.1, 0);
-			}
-		}
 	});
 
 	glfwSetMouseButtonCallback( window.window, 
@@ -279,14 +256,19 @@ int main(int argc, char **argv) try
 	sceneUBO.data->light_count = cfg::kLightNum;
 	
 	// create light ubo
-	glsl::LightArrayUBO lightUBO(window, allocator, dpool, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
-	lightUBO.data = std::make_unique<glsl::LightArray<cfg::kLightNum>>();
-	
-	glsl::updateLight(lightUBO, 0, {0, 3, 0});
-	glsl::updateLight(lightUBO, 1, {-10, 3, 0});
-	glsl::updateLight(lightUBO, 2, {10, 3, 0});
+	LightArrayUBO lightUBO(window, allocator, dpool, VK_SHADER_STAGE_FRAGMENT_BIT, 0);
+	lightUBO.data = std::make_unique<glsl::TArray<glsl::SpotLight, cfg::kLightNum>>();
 
-	auto a_shadow_pass = std::make_unique<Shadow::ShadowPass>(window, allocator, cfg::kLightNum, 256, 256);
+	// create light transform ubo
+	LightTransUBO lightTransUBO(window, allocator, dpool, VK_SHADER_STAGE_VERTEX_BIT, 0);
+	lightTransUBO.data = std::make_unique<glsl::TArray<glm::mat4, cfg::kLightNum>>();
+
+	// setup light informations
+	updateLight(lightUBO, lightTransUBO, 0, {0, 1, -20}, {1, 0, 0});
+	updateLight(lightUBO, lightTransUBO, 1, {0, 1, -20}, {0, 0, -1});
+	updateLight(lightUBO, lightTransUBO, 2, {0, 1, -20}, {-1, 0, 0});
+
+	auto a_shadow_pass = std::make_unique<Shadow::ShadowPass>(window, allocator, cfg::kLightNum, 1024, 1024);
 	a_shadow_pass->createShadowSet(window, allocator, dpool);
 	a_shadow_pass->configShadowPipeLine(window, shadowVert, shadowFrag);
 	
@@ -295,6 +277,7 @@ int main(int argc, char **argv) try
 	basicPipeGen
 	.setViewPort(float(window.swapchainExtent.width), float(window.swapchainExtent.height))
 	.addDescLayout(sceneUBO.layout.handle)
+	.addDescLayout(lightTransUBO.layout.handle)
 	.addDescLayout(lightUBO.layout.handle)
 	.addDescLayout(a_shadow_pass->shadow_set_layout.handle)
 	.enableBlend(false)
@@ -302,8 +285,6 @@ int main(int argc, char **argv) try
 	.setPolyGonMode(VK_POLYGON_MODE_FILL)
 	.enableDepthTest(true)
 	.setRenderMode(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
-
-
 
 	// cache all pipeline
 	std::unordered_map<cfg::ShadingMode, std::vector<RenderPipeLine>> pipelineMap;
@@ -458,6 +439,14 @@ int main(int argc, char **argv) try
 				VK_PIPELINE_BIND_POINT_GRAPHICS, 
 				pipe.layout.handle, 1,
 				1, 
+				&lightTransUBO.set, 
+				0, nullptr
+			);
+
+			vkCmdBindDescriptorSets(cmdBuffer, 
+				VK_PIPELINE_BIND_POINT_GRAPHICS, 
+				pipe.layout.handle, 2,
+				1, 
 				&lightUBO.set, 
 				0, nullptr
 			);
@@ -485,10 +474,11 @@ int main(int argc, char **argv) try
 				// upload ubo
 				sceneUBO.upload(cmdBuffer, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
 				lightUBO.upload(cmdBuffer, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+				lightTransUBO.upload(cmdBuffer, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
 
 				for (int i = 0; i < cfg::kLightNum; i ++) {
-					if (glsl::lightChanged[i]) // only update after change
-						a_shadow_pass->triggerPass(i, lightUBO.data->array[i].position, lightUBO.data->array[i].max_depth, cbuffers[imageIndex],
+					if (lightChanged[i]){} // only update after change
+						a_shadow_pass->triggerPass(i, lightTransUBO.data->array[i], cbuffers[imageIndex],
 							[&](VkCommandBuffer cmdBuffer) {
 								model->onShadowDraw(cmdBuffer);
 							}
@@ -500,9 +490,9 @@ int main(int argc, char **argv) try
 			[&](VkCommandBuffer cmdBuffer) {
 				auto& pipe = pipelineMap[sCurrentMode][0];
 				BeginPipeline(cmdBuffer, pipe);
-				BindingMatSet(pipe, cmdBuffer, a_shadow_pass->shadow_set, 2);
+				BindingMatSet(pipe, cmdBuffer, a_shadow_pass->shadow_set, 3);
 				model->onDraw(cmdBuffer, [&](VkDescriptorSet tex_set) {
-					BindingMatSet(pipe, cmdBuffer, tex_set, 3);
+					BindingMatSet(pipe, cmdBuffer, tex_set, 4);
 				});
 			}
 		);
@@ -519,7 +509,7 @@ int main(int argc, char **argv) try
 		
 		std::printf("FPS: %.3f \n", 1.f / duration);
 		// reset bits
-		glsl::resetLights();
+		resetLights();
 	}
 	
 	// Cleanup takes place automatically in the destructors, but we sill need

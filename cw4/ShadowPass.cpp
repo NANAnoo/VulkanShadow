@@ -1,36 +1,10 @@
 #include "ShadowPass.h"
 
-static glm::mat4 getCubeVPOnFace(const glm::vec3 &pos, int face) {
-    // calculate view matrix for face
-    glm::mat4 view;
-    switch (face) {
-        case 0:
-            view = glm::lookAt(pos, pos + glm::vec3(1, 0, 0), glm::vec3(0, -1, 0));
-            break;
-        case 1:
-            view = glm::lookAt(pos, pos + glm::vec3(-1, 0, 0), glm::vec3(0, -1, 0));
-            break;
-        case 2:
-            view = glm::lookAt(pos, pos + glm::vec3(0, 1, 0), glm::vec3(0, 0, 1));
-            break;
-        case 3:
-            view = glm::lookAt(pos, pos + glm::vec3(0, -1, 0), glm::vec3(0, 0, -1));
-            break;
-        case 4:
-            view = glm::lookAt(pos, pos + glm::vec3(0, 0, 1), glm::vec3(0, -1, 0));
-            break;
-        default:
-            view = glm::lookAt(pos, pos + glm::vec3(0, 0, -1), glm::vec3(0, -1, 0));
-            break;
-    }
-    return glm::perspective(glm::radians(90.0f), 1.0f, 0.1f, 100.0f) * view;
-}
-
 Shadow::ShadowPass::ShadowPass(lut::VulkanContext &aContext, lut::Allocator const& aAllocator, int size, int width, int height) :
     m_size(size), m_width(width), m_height(height)
 {
     createRenderPass(aContext);
-    createCubeArray(aContext, aAllocator);
+    createShadowArray(aContext, aAllocator);
     createFrameBuffers(aContext);
 
     VkSamplerCreateInfo samplerInfo{};
@@ -59,51 +33,38 @@ Shadow::ShadowPass::ShadowPass(lut::VulkanContext &aContext, lut::Allocator cons
     shadow_sampler = lut::Sampler( aContext.device, sampler );
 }
 
-void Shadow::ShadowPass::triggerPass(int index, glm::vec3 lightPos, float max_dpeth, VkCommandBuffer const&cBuffer, const std::function<void(VkCommandBuffer const&)> &onDraw)
+void Shadow::ShadowPass::triggerPass(int index, glm::mat4 const& transform, VkCommandBuffer const&cBuffer, const std::function<void(VkCommandBuffer const&)> &onDraw)
 {
-    // Begin recording commands
-    // VkCommandBufferBeginInfo beginInfo{};
-    // beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    // beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    // beginInfo.pInheritanceInfo = nullptr;
-    // if (auto const res = vkBeginCommandBuffer(cBuffer, &beginInfo); VK_SUCCESS != res) {
-    //     throw lut::Error("Unable to begin recording command buffer\n"
-    //         "vkBeginCommandBuffer() returned %s", lut::to_string(res).c_str());
-    // }
-    for (int face = 0; face < 6; face ++) {
-        shadow_transform_ubo->data->mat = getCubeVPOnFace(lightPos, face);
-        shadow_transform_ubo->data->light_pos = lightPos;
-        shadow_transform_ubo->data->max_depth = max_dpeth;
-        shadow_transform_ubo->upload(cBuffer, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
+    shadow_transform_ubo->data->mat = transform;
+    shadow_transform_ubo->upload(cBuffer, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT);
 
-		// Begin render pass
-		VkClearValue clearValues[1]{};
-		clearValues[0].depthStencil.depth = 1.f; // clear depth as 1.0f
+    // Begin render pass
+    VkClearValue clearValues[1]{};
+    clearValues[0].depthStencil.depth = 1.f; // clear depth as 1.0f
 
-		VkRenderPassBeginInfo passInfo{};
-		passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-		passInfo.renderPass = m_pass.handle;
-		passInfo.framebuffer = m_fbs[index * 6 + face].handle;
-		passInfo.renderArea.offset = VkOffset2D{ 0, 0 };
-		passInfo.renderArea.extent = {(unsigned int)m_width, (unsigned int)m_height};
-		passInfo.clearValueCount = sizeof(clearValues) / sizeof(VkClearValue);  
-		passInfo.pClearValues = clearValues;
+    VkRenderPassBeginInfo passInfo{};
+    passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    passInfo.renderPass = m_pass.handle;
+    passInfo.framebuffer = m_fbs[index].handle;
+    passInfo.renderArea.offset = VkOffset2D{ 0, 0 };
+    passInfo.renderArea.extent = {(unsigned int)m_width, (unsigned int)m_height};
+    passInfo.clearValueCount = sizeof(clearValues) / sizeof(VkClearValue);  
+    passInfo.pClearValues = clearValues;
 
-		vkCmdBeginRenderPass(cBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(cBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadow_pipe.pipe.handle);
-        vkCmdBindDescriptorSets(cBuffer, 
-            VK_PIPELINE_BIND_POINT_GRAPHICS, 
-            m_shadow_pipe.layout.handle, 0,
-            1, 
-            &shadow_transform_ubo->set, 
-            0, nullptr
-        );
-        onDraw(cBuffer);
+    vkCmdBeginRenderPass(cBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(cBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_shadow_pipe.pipe.handle);
+    vkCmdBindDescriptorSets(cBuffer, 
+        VK_PIPELINE_BIND_POINT_GRAPHICS, 
+        m_shadow_pipe.layout.handle, 0,
+        1, 
+        &shadow_transform_ubo->set, 
+        0, nullptr
+    );
+    onDraw(cBuffer);
 
-		// End the render pass
-		vkCmdEndRenderPass(cBuffer);
-    }
-    auto &[_, img] = m_shadow_cube_array;
+    // End the render pass
+    vkCmdEndRenderPass(cBuffer);
+    auto &[_, img] = shadow_imgs[index];
     lut::image_barrier(cBuffer, img.image,
         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT, // renderpass write to it
         VK_ACCESS_SHADER_READ_BIT, // color pass will read it
@@ -113,14 +74,9 @@ void Shadow::ShadowPass::triggerPass(int index, glm::vec3 lightPos, float max_dp
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VkImageSubresourceRange{
             VK_IMAGE_ASPECT_DEPTH_BIT,
-            0, 1, uint32_t(index * 6), 6
+            0, 1, 0, 1
         }
     );
-    // End command recording
-    // if (auto const res = vkEndCommandBuffer(cBuffer); VK_SUCCESS != res) {
-    //     throw lut::Error("Unable to end recording command buffer\n"
-    //         "vkEndCommandBuffer() returned %s", lut::to_string(res).c_str());
-    // }
 }
 
 void Shadow::ShadowPass::createRenderPass(lut::VulkanContext &aContext) 
@@ -161,78 +117,58 @@ void Shadow::ShadowPass::createRenderPass(lut::VulkanContext &aContext)
     m_pass = lut::RenderPass( aContext.device, rpass );
 }
 
-void Shadow::ShadowPass::createCubeArray(lut::VulkanContext &aContext, lut::Allocator const& aAllocator) 
+void Shadow::ShadowPass::createShadowArray(lut::VulkanContext &aContext, lut::Allocator const& aAllocator) 
 {
-    VkImageCreateInfo imageInfo{};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D; 
-    imageInfo.format = VK_FORMAT_D32_SFLOAT;
-    imageInfo.extent.width = m_width;
-    imageInfo.extent.height = m_height;
-    imageInfo.extent.depth = 1; 
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = m_size * 6; // m_size cubes
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT; 
-    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; 
-    imageInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    // create attachments image views for each face on each
+    for (uint32_t i = 0; i < uint32_t(m_size); i ++) {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D; 
+        imageInfo.format = VK_FORMAT_D32_SFLOAT;
+        imageInfo.extent.width = m_width;
+        imageInfo.extent.height = m_height;
+        imageInfo.extent.depth = 1; 
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT; 
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; 
 
-    VmaAllocationCreateInfo allocInfo{};
-    allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; 
-    VkImage image = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE; 
-    if( auto const res = vmaCreateImage( aAllocator.allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr ); 
-        VK_SUCCESS != res )
-    {
-        throw lut::Error( "Unable to allocate screen buffer image.\n"
-            "vmaCreateImage() returned %s", lut::to_string(res).c_str());
-    }
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY; 
+        VkImage image = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE; 
+        if( auto const res = vmaCreateImage( aAllocator.allocator, &imageInfo, &allocInfo, &image, &allocation, nullptr ); 
+            VK_SUCCESS != res )
+        {
+            throw lut::Error( "Unable to allocate screen buffer image.\n"
+                "vmaCreateImage() returned %s", lut::to_string(res).c_str());
+        }
 
-    lut::Image cube_array( aAllocator.allocator, image, allocation );
+        lut::Image shadow_img( aAllocator.allocator, image, allocation );
 
-    // Create the image view
-    VkImageViewCreateInfo viewInfo{}; 
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = cube_array.image; 
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
-    viewInfo.format = VK_FORMAT_D32_SFLOAT;
-    viewInfo.components = VkComponentMapping{};
-    viewInfo.subresourceRange = VkImageSubresourceRange{
-        VK_IMAGE_ASPECT_DEPTH_BIT,
-        0, 1, 0, uint32_t(m_size * 6)};
-    
-    VkImageView view = VK_NULL_HANDLE;
-
-    if( auto const res = vkCreateImageView( aContext.device, &viewInfo, nullptr, &view );
-        VK_SUCCESS != res )
-    {
-        throw lut::Error( "Unable to create image view\n" 
-            "vkCreateImageView() returned %s", lut::to_string(res).c_str() );
-    }
-    m_shadow_cube_array = std::make_tuple(lut::ImageView(aContext.device, view), std::move(cube_array));
-
-    auto &[_, img] = m_shadow_cube_array;
-    // create attachments image views for each face on each cube
-    for (uint32_t i = 0; i < uint32_t(m_size * 6); i ++) {
+        // Create the image view
         VkImageViewCreateInfo viewInfo{}; 
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = img.image;
+        viewInfo.image = shadow_img.image; 
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = VK_FORMAT_D32_SFLOAT;
         viewInfo.components = VkComponentMapping{};
         viewInfo.subresourceRange = VkImageSubresourceRange{
-        VK_IMAGE_ASPECT_DEPTH_BIT,
-        0, 1, i, 1};
+            VK_IMAGE_ASPECT_DEPTH_BIT,
+            0, 1, 0, 1};
+        
         VkImageView view = VK_NULL_HANDLE;
+
         if( auto const res = vkCreateImageView( aContext.device, &viewInfo, nullptr, &view );
             VK_SUCCESS != res )
         {
             throw lut::Error( "Unable to create image view\n" 
                 "vkCreateImageView() returned %s", lut::to_string(res).c_str() );
         }
-        attachemt_views.emplace_back(lut::ImageView(aContext.device, view));
+        shadow_imgs.push_back({lut::ImageView(aContext.device, view), std::move(shadow_img)});
     }
 }
 
@@ -246,7 +182,6 @@ void Shadow::ShadowPass::configShadowPipeLine(
     gen.setViewPort(float(m_width), float(m_height))
 	.addDescLayout(shadow_transform_ubo->layout.handle)
 	.enableBlend(false)
-	.setCullMode(VK_CULL_MODE_FRONT_BIT)
 	.setPolyGonMode(VK_POLYGON_MODE_FILL)
 	.enableDepthTest(true)
     .bindVertShader(vert)
@@ -270,7 +205,7 @@ void Shadow::ShadowPass::createShadowSet(lut::VulkanContext const& aContext,
         VkDescriptorSetLayoutBinding bindings[1]{};
         bindings[0].binding = 0; // bind texture sampler 0
         bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[0].descriptorCount = 1; 
+        bindings[0].descriptorCount = m_size; 
         bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT; 
         
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
@@ -291,29 +226,32 @@ void Shadow::ShadowPass::createShadowSet(lut::VulkanContext const& aContext,
         }
         shadow_set_layout = lut::DescriptorSetLayout( aContext.device, layout );
     }
-
-    auto &[view, _] = m_shadow_cube_array;
-    // write descriptor set
-    VkDescriptorImageInfo img_info[1];
-    img_info[0].sampler = shadow_sampler.handle;
-    img_info[0].imageView =  view.handle;
-    img_info[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     shadow_set = lut::alloc_desc_set(aContext, dPool.handle, shadow_set_layout.handle);
+
+    std::vector<VkDescriptorImageInfo> img_infos(m_size);
+    for (int i = 0; i < m_size; i ++) {
+        // write descriptor set
+        auto &[view, _] = shadow_imgs[i];
+        img_infos[i].sampler = shadow_sampler.handle;
+        img_infos[i].imageView =  view.handle;
+        img_infos[i].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    }
     VkWriteDescriptorSet desc{};
     desc.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     desc.dstSet = shadow_set; 
     desc.dstBinding = 0; //
     desc.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    desc.descriptorCount = 1; 
-    desc.pImageInfo = img_info; 
+    desc.descriptorCount = m_size; 
+    desc.pImageInfo = img_infos.data(); 
     vkUpdateDescriptorSets( aContext.device, 1, &desc, 0, nullptr );
 }
 
 void Shadow::ShadowPass::createFrameBuffers(lut::VulkanContext &aContext) 
 {
-    for (int i = 0; i < m_size * 6; i ++) {
+    for (int i = 0; i < m_size; i ++) {
+        auto &[view, _] = shadow_imgs[i];
         VkImageView attachments[1];
-        attachments[0] = attachemt_views[i].handle;
+        attachments[0] = view.handle;
         VkFramebufferCreateInfo fbInfo{};
         fbInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fbInfo.flags = 0; 

@@ -1,10 +1,11 @@
 #version 450
 
-#define MAX_LIGHT_NUM 10
+#define MAX_LIGHT_NUM 3
 
 layout( location = 0 ) in vec2 v2f_tc;
 layout( location = 1 ) in vec4 pos_world;
 layout( location = 2 ) in vec3 normal_world;
+layout( location = 3 ) in vec4 shadow_projcoords[MAX_LIGHT_NUM];
 
 layout( location = 0) out vec4 oColor;
 
@@ -17,24 +18,25 @@ layout( set = 0, binding = 0 ) uniform UScene
     int light_count;
 } uScene;
 
-struct LightInfo {
+struct SpotLight {
     vec4 color;
-    vec3 pos;
-    float max_depth;
+    vec4 position;
+    vec3 direction;
+    float fov;
 };
 
-layout( set = 1, binding = 0 ) uniform Light
+layout( set = 2, binding = 0 ) uniform Light
 {
-    LightInfo lights[MAX_LIGHT_NUM];
+    SpotLight lights[MAX_LIGHT_NUM];
 } uLight;
 
-layout( set = 2, binding = 0 ) uniform samplerCubeArrayShadow shadowMap;
+layout( set = 3, binding = 0 ) uniform sampler2DShadow shadowMap[MAX_LIGHT_NUM];
 
-layout( set = 3, binding = 0 ) uniform sampler2D baseColor;
-layout( set = 3, binding = 1 ) uniform sampler2D metalness;
-layout( set = 3, binding = 2 ) uniform sampler2D roughness;
-layout( set = 3, binding = 3 ) uniform sampler2D alphaMask;
-layout( set = 3, binding = 4 ) uniform sampler2D normalMap;
+layout( set = 4, binding = 0 ) uniform sampler2D baseColor;
+layout( set = 4, binding = 1 ) uniform sampler2D metalness;
+layout( set = 4, binding = 2 ) uniform sampler2D roughness;
+layout( set = 4, binding = 3 ) uniform sampler2D alphaMask;
+layout( set = 4, binding = 4 ) uniform sampler2D normalMap;
 
 const float PI = 3.14159265359;
 
@@ -76,11 +78,23 @@ vec3 getNormalFromMap(vec3 normal)
     return normalize(TBN * tangentNormal);
 }
 
-float getShadow(vec3 light_dir, int which_light) {
-    float max_depth = uLight.lights[which_light].max_depth;
-    float current_depth = length(light_dir) / max_depth;
-    float has_shadow = texture(shadowMap, vec4(normalize(light_dir), which_light), current_depth - 0.01);
-    return has_shadow;
+bool insideSpotLight(int which_light) {
+    vec4 fragpos = shadow_projcoords[which_light];
+    if (fragpos.w < 0) return false;
+    fragpos = fragpos / fragpos.w;
+    fragpos.xy = (fragpos.xy + 1.0) / 2.0;
+    return fragpos.x < 1 && fragpos.x > 0 && fragpos.y < 1 && fragpos.y > 0;
+}
+
+float getShadow(int which_light) 
+{
+    vec4 fragpos = shadow_projcoords[which_light];
+    //if (shadow_projcoords[which_light].w < 0) return 0;
+    fragpos = fragpos / fragpos.w;
+    fragpos.xy = (fragpos.xy + 1.0) / 2.0;
+    fragpos.z = fragpos.z- 0.0005;
+    float shadow = textureProj(shadowMap[which_light], fragpos);
+    return shadow;
 }
 
 void main()
@@ -99,8 +113,9 @@ void main()
     // for each light:
     vec3 lighting = vec3(0);
     for (int light_id = 0; light_id < uScene.light_count && light_id < MAX_LIGHT_NUM; light_id ++) {
+        if (!insideSpotLight(light_id)) continue;
         // calculate view and light direction
-        vec3 L = normalize(uLight.lights[light_id].pos - vec3(pos_world));
+        vec3 L = normalize(vec3(uLight.lights[light_id].position - pos_world));
         vec3 V = normalize(uScene.camPos - vec3(pos_world));
 
         vec3 H = normalize(V + L);
@@ -124,7 +139,7 @@ void main()
 
         // add to outgoing radiance Lo
         float NdotL = max(dot(N, L), 0.0);                
-        vec3 radiance = uLight.lights[light_id].color.rgb * (1.0 - getShadow(vec3(pos_world) - uLight.lights[light_id].pos, light_id));
+        vec3 radiance = uLight.lights[light_id].color.rgb * (1.0 - getShadow(light_id));
         lighting += (kD * albedo / PI + specular) * NdotL * radiance;
     }
     
