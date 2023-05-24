@@ -579,8 +579,6 @@ namespace
 
 		VkPhysicalDeviceFeatures deviceFeatures{};
 		deviceFeatures.samplerAnisotropy = supportFeatures.samplerAnisotropy;
-		deviceFeatures.geometryShader = supportFeatures.geometryShader;
-		deviceFeatures.imageCubeArray = supportFeatures.imageCubeArray;
 		// No extra features for now.
 		
 		VkDeviceCreateInfo deviceInfo{};
