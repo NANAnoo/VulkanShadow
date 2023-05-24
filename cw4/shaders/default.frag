@@ -98,8 +98,8 @@ float getShadow(int which_light, float bias)
     fragpos.z = fragpos.z - bias;
     vec2 uv = (fragpos.xy + 1.0) / 2.0;
     float shadow = 0.0;
-    for (int i = - PCF_LENGTH; i < PCF_LENGTH; i ++) {
-        for (int j = - PCF_LENGTH; j < PCF_LENGTH; j ++) {
+    for (int i = - PCF_LENGTH; i <= PCF_LENGTH; i ++) {
+        for (int j = - PCF_LENGTH; j <= PCF_LENGTH; j ++) {
             fragpos.xy = uv + ShadowPixelSize * vec2(float(i), float(j));
             shadow += textureProj(shadowMap[which_light], fragpos);
         }
@@ -149,8 +149,8 @@ void main()
 
         // add to outgoing radiance Lo
         float NdotL = max(dot(N, L), 0.0);               
-        float bias = max((1.0 - NDotL) * 0.005, 0.0004);
-        vec3 radiance = uLight.lights[light_id].color.rgb * (1.0 - getShadow(light_id, bias));
+        float bias  = max((1.0 - NDotL) * 0.005, 0.0004);
+        vec3 radiance = uLight.lights[light_id].color.rgb * getShadow(light_id, bias);
         lighting += (kD * albedo / PI + specular) * NdotL * radiance;
     }
     

@@ -299,7 +299,6 @@ int main(int argc, char **argv) try
 	.addDescLayout(lightUBO.layout.handle)
 	.addDescLayout(a_shadow_pass->shadow_set_layout.handle)
 	.enableBlend(false)
-	.setCullMode(VK_CULL_MODE_BACK_BIT)
 	.setPolyGonMode(VK_POLYGON_MODE_FILL)
 	.enableDepthTest(true)
 	.setRenderMode(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);

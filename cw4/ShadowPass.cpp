@@ -16,7 +16,7 @@ Shadow::ShadowPass::ShadowPass(lut::VulkanContext &aContext, lut::Allocator cons
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; 
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; 
     samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
-    samplerInfo.compareOp = VK_COMPARE_OP_GREATER;
+    samplerInfo.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
     samplerInfo.compareEnable = VK_TRUE;
     samplerInfo.minLod = 0.f;
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
@@ -183,6 +183,7 @@ void Shadow::ShadowPass::configShadowPipeLine(
 	.addDescLayout(shadow_transform_ubo->layout.handle)
 	.enableBlend(false)
 	.setPolyGonMode(VK_POLYGON_MODE_FILL)
+    .setCullMode(VK_CULL_MODE_FRONT_BIT)
 	.enableDepthTest(true)
     .bindVertShader(vert)
     .bindFragShader(frag)

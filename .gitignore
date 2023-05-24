@@ -5,4 +5,5 @@ assets/
 bin/
 lib/
 .cache
+report/
 compile_commands.json
