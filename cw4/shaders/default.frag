@@ -1,6 +1,7 @@
 #version 450
 
-#define MAX_LIGHT_NUM 3
+#define MAX_LIGHT_NUM 4
+#define PCF_LENGTH 3
 
 layout( location = 0 ) in vec2 v2f_tc;
 layout( location = 1 ) in vec4 pos_world;
@@ -39,6 +40,10 @@ layout( set = 4, binding = 3 ) uniform sampler2D alphaMask;
 layout( set = 4, binding = 4 ) uniform sampler2D normalMap;
 
 const float PI = 3.14159265359;
+
+vec2 ShadowPixelSize = 1.0 / textureSize(shadowMap[0], 0);
+
+float PCF_SMAPLE_COUNT = float(4 * PCF_LENGTH * PCF_LENGTH);
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {
@@ -86,15 +91,20 @@ bool insideSpotLight(int which_light) {
     return fragpos.x < 1 && fragpos.x > 0 && fragpos.y < 1 && fragpos.y > 0;
 }
 
-float getShadow(int which_light) 
+float getShadow(int which_light, float bias) 
 {
     vec4 fragpos = shadow_projcoords[which_light];
-    //if (shadow_projcoords[which_light].w < 0) return 0;
     fragpos = fragpos / fragpos.w;
-    fragpos.xy = (fragpos.xy + 1.0) / 2.0;
-    fragpos.z = fragpos.z- 0.0005;
-    float shadow = textureProj(shadowMap[which_light], fragpos);
-    return shadow;
+    fragpos.z = fragpos.z - bias;
+    vec2 uv = (fragpos.xy + 1.0) / 2.0;
+    float shadow = 0.0;
+    for (int i = - PCF_LENGTH; i < PCF_LENGTH; i ++) {
+        for (int j = - PCF_LENGTH; j < PCF_LENGTH; j ++) {
+            fragpos.xy = uv + ShadowPixelSize * vec2(float(i), float(j));
+            shadow += textureProj(shadowMap[which_light], fragpos);
+        }
+    }
+    return shadow / PCF_SMAPLE_COUNT; 
 }
 
 void main()
@@ -138,8 +148,9 @@ void main()
         vec3 specular     = (NDF * G * F) / (4.0 * NDotV * NDotL + 0.001);
 
         // add to outgoing radiance Lo
-        float NdotL = max(dot(N, L), 0.0);                
-        vec3 radiance = uLight.lights[light_id].color.rgb * (1.0 - getShadow(light_id));
+        float NdotL = max(dot(N, L), 0.0);               
+        float bias = max((1.0 - NDotL) * 0.005, 0.0004);
+        vec3 radiance = uLight.lights[light_id].color.rgb * (1.0 - getShadow(light_id, bias));
         lighting += (kD * albedo / PI + specular) * NdotL * radiance;
     }
     

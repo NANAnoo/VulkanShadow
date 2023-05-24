@@ -1,6 +1,6 @@
 #version 450
 
-#define MAX_LIGHT_NUM 3
+#define MAX_LIGHT_NUM 4
 
 layout (location = 0) in vec3 position;
 layout (location = 1) in vec3 normal;

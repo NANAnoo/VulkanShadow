@@ -77,7 +77,7 @@ namespace
 
 		const auto kDepthFormat = VK_FORMAT_D32_SFLOAT;
 
-		constexpr int kLightNum = 3;
+		constexpr int kLightNum = 4;
 
 		enum ShadingMode{
 			Basic,
@@ -89,22 +89,19 @@ namespace
 
     static bool lightChanged[cfg::kLightNum] = {true};
 	static inline glm::mat4 getLightTransform(glsl::SpotLight const&light) {
-		glm::mat4 P = glm::perspectiveRH_ZO(
-			lut::Radians(cfg::kCameraFov).value(),
-			1.0f,
-			0.1f,
-			50.f
-		);
-		P[1][1] *= -1.f;
-        glm::mat4 view = glm::lookAt(glm::vec3(light.position), glm::vec3(light.position) + light.direction, glm::vec3(0, 1, 0));
+		glm::mat4 P = glm::perspective(glm::radians(light.fov), 1.0f, 0.1f, 50.f);
+		float y = 1, z = 0;
+		if (glm::abs(light.direction.x) + glm::abs(light.direction.z) < 0.01)
+			{z = 1; y = 0;}
+        glm::mat4 view = glm::lookAt(glm::vec3(light.position), glm::vec3(light.position) + light.direction, glm::vec3(0, y, z));
         return  P * view;
     }
-    inline void updateLight(const LightArrayUBO& ubo, const LightTransUBO& trans_ubo, int which, glm::vec3 pos, glm::vec3 dir, glm::vec4 color = glm::vec4(1)) {
+    inline void updateLight(const LightArrayUBO& ubo, const LightTransUBO& trans_ubo, int which, glm::vec3 pos, glm::vec3 dir, float fov = 30, glm::vec4 color = glm::vec4(1)) {
         lightChanged[which] = true;
         ubo.data->array[which].position = {pos, 1};
         ubo.data->array[which].color = color;
         ubo.data->array[which].direction = glm::normalize(dir);
-		ubo.data->array[which].fov = 30;
+		ubo.data->array[which].fov = fov;
 		trans_ubo.data->array[which] = getLightTransform(ubo.data->array[which]);
     }
     inline void resetLights() {
@@ -175,31 +172,51 @@ int main(int argc, char **argv) try
 	}
 	// Create Vulkan Window
 	auto window = lut::make_vulkan_window(level);
-	glfwSetWindowSize(window.window, 800, 800);
 
 	// Configure the GLFW window
 	static bool enableMouseNavigation = false;
-	static FpsController sController({0, 0, -25}, {0, 0, 0}, 5, 4);
+	static FpsController sController({0, -3, -76}, {0, 180, 0}, 5, 4);
 	static float cursor_x = 0, cursor_y = 0, offset_x = 0, offset_y = 0;
 	static cfg::ShadingMode sCurrentMode = cfg::Basic;
 	static bool shouldGeneratePipeLine = true;
 	static bool modeChanged = true;
+	static bool sShouldUpdateLight = false;
+	static int sUpdatingLight = 0;
+	static glm::vec3 sLightMoveV{0, 0, 0};
 	glfwSetKeyCallback( window.window, 
 	[]( GLFWwindow* aWindow, int aKey, int, int aAction, int){
-		if( GLFW_KEY_ESCAPE == aKey && GLFW_PRESS == aAction )
-		{	// close window
+		if( GLFW_KEY_ESCAPE == aKey && GLFW_PRESS == aAction ){	
+			// close window
 			glfwSetWindowShouldClose( aWindow, GLFW_TRUE );
 		} // move control: 
 		if (aAction == GLFW_RELEASE) {
 			sController.onKeyUp(aKey);
 			if (aKey == GLFW_KEY_1) {
-				// normal mode
-				modeChanged = (sCurrentMode != cfg::Basic);
-				sCurrentMode = cfg::Basic;
-			}
-		} else if (aAction == GLFW_PRESS) {
+				sUpdatingLight = 0;
+			} else if (aKey == GLFW_KEY_2) {
+				sUpdatingLight = 1;
+			} else if (aKey == GLFW_KEY_3) {
+				sUpdatingLight = 2;
+			} else if (aKey == GLFW_KEY_4) {
+				sUpdatingLight = 3;
+			} 
+			sShouldUpdateLight = false;
+        } else if (aAction == GLFW_PRESS) {
 			sController.onKeyPress(aKey);
-		} 
+			if (aKey == GLFW_KEY_UP) {
+					sShouldUpdateLight = true;
+					sLightMoveV = glm::vec3(1, 0, 0);
+			} else if (aKey == GLFW_KEY_DOWN) {
+					sShouldUpdateLight = true;
+					sLightMoveV = glm::vec3(-1, 0, 0);
+			} else if (aKey == GLFW_KEY_LEFT) {
+					sShouldUpdateLight = true;
+					sLightMoveV = glm::vec3(0, 0, 1);
+			} else if (aKey == GLFW_KEY_RIGHT) {
+					sShouldUpdateLight = true;
+					sLightMoveV = glm::vec3(0, 0, -1);
+			}
+        } 
 	});
 
 	glfwSetMouseButtonCallback( window.window, 
@@ -264,9 +281,10 @@ int main(int argc, char **argv) try
 	lightTransUBO.data = std::make_unique<glsl::TArray<glm::mat4, cfg::kLightNum>>();
 
 	// setup light informations
-	updateLight(lightUBO, lightTransUBO, 0, {0, 1, -20}, {1, 0, 0});
-	updateLight(lightUBO, lightTransUBO, 1, {0, 1, -20}, {0, 0, -1});
-	updateLight(lightUBO, lightTransUBO, 2, {0, 1, -20}, {-1, 0, 0});
+	updateLight(lightUBO, lightTransUBO, 0, {0, 1, -20}, {0, 0, -1}, 15);
+	updateLight(lightUBO, lightTransUBO, 1, {-3, -1, -26}, {0, 1, 0}, 150);
+	updateLight(lightUBO, lightTransUBO, 2, {3, -1, -26}, {0, 1, 0}, 150);
+	updateLight(lightUBO, lightTransUBO, 3, {0, 4, -75}, {0, -1, 0}, 150);
 
 	auto a_shadow_pass = std::make_unique<Shadow::ShadowPass>(window, allocator, cfg::kLightNum, 1024, 1024);
 	a_shadow_pass->createShadowSet(window, allocator, dpool);
@@ -326,6 +344,10 @@ int main(int argc, char **argv) try
 		);
 	}
 
+	// stats data
+	const double print_duration = 5.0; // print per 5 seconds
+	double mean_fps = 0, record_count = 0, record_duration = 0;
+
 	// Application main loop
 	bool recreateSwapchain = false;
 	auto previous = std::chrono::system_clock::now();
@@ -337,6 +359,13 @@ int main(int argc, char **argv) try
 		previous = now;
 		// update control info
 		sController.update(duration);
+		// update light 
+		if (sShouldUpdateLight) {
+			updateLight(lightUBO, lightTransUBO, sUpdatingLight,
+							lightUBO.data->array[sUpdatingLight].position +
+								glm::vec4(sLightMoveV, 0) * duration,
+							lightUBO.data->array[sUpdatingLight].direction);
+		}
 		// update uniforms
 		update_scene_uniforms(
 			*sceneUBO.data.get(), 
@@ -507,7 +536,18 @@ int main(int argc, char **argv) try
 		// present rendered images.
 		present_results(window.presentQueue, window.swapchain, imageIndex, renderFinished.handle, recreateSwapchain);
 		
-		std::printf("FPS: %.3f \n", 1.f / duration);
+		double new_fps = 1.f / duration;
+		mean_fps = (mean_fps * record_count + new_fps) / (record_count + 1);
+		record_duration += duration;
+		record_count += 1;
+		if (record_duration > print_duration) {
+			std::printf("------------ infos-------------------\n");
+			std::printf("FPS: %.3f \n", mean_fps);
+			std::printf("POSITION: (%.3f, %.3f, %.3f) \n", sController.m_position.x, sController.m_position.y, sController.m_position.z);
+			mean_fps = 0;
+			record_duration = 0;
+			record_count = 0;
+		}
 		// reset bits
 		resetLights();
 	}

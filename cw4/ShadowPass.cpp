@@ -15,7 +15,7 @@ Shadow::ShadowPass::ShadowPass(lut::VulkanContext &aContext, lut::Allocator cons
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; 
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; 
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER; 
-    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+    samplerInfo.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     samplerInfo.compareOp = VK_COMPARE_OP_GREATER;
     samplerInfo.compareEnable = VK_TRUE;
     samplerInfo.minLod = 0.f;
