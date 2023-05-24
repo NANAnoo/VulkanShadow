@@ -95,13 +95,13 @@ float getShadow(int which_light, float bias)
 {
     vec4 fragpos = shadow_projcoords[which_light];
     fragpos = fragpos / fragpos.w;
-    fragpos.z = fragpos.z - bias;
+    //fragpos.z = fragpos.z - bias;
     vec2 uv = (fragpos.xy + 1.0) / 2.0;
     float shadow = 0.0;
     for (int i = - PCF_LENGTH; i <= PCF_LENGTH; i ++) {
         for (int j = - PCF_LENGTH; j <= PCF_LENGTH; j ++) {
             fragpos.xy = uv + ShadowPixelSize * vec2(float(i), float(j));
-            shadow += textureProj(shadowMap[which_light], fragpos);
+            shadow += textureProj(shadowMap[which_light], fragpos, bias);
         }
     }
     return shadow / PCF_SMAPLE_COUNT; 
