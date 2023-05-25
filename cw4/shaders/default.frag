@@ -101,7 +101,7 @@ float getShadow(int which_light, float bias)
     for (int i = - PCF_LENGTH; i <= PCF_LENGTH; i ++) {
         for (int j = - PCF_LENGTH; j <= PCF_LENGTH; j ++) {
             fragpos.xy = uv + ShadowPixelSize * vec2(float(i), float(j));
-            shadow += textureProj(shadowMap[which_light], fragpos).r;
+            shadow += textureProj(shadowMap[which_light], fragpos);
         }
     }
     return shadow / PCF_SMAPLE_COUNT; 
